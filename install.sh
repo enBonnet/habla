@@ -161,9 +161,13 @@ PY
 fi
 
 say "GNOME Shell extension"
+command -v zip >/dev/null || { echo "zip(1) is required to bundle the compiled schema" >&2; exit 1; }
 glib-compile-schemas "$HERE/schemas"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 gnome-extensions pack --force --out-dir="$tmp" --extra-source=constants.js "$HERE"
+# gnome-extensions pack on GNOME 50 omits schemas/gschemas.compiled; without it
+# getSettings() fails after install, so append the freshly compiled cache.
+(cd "$HERE" && zip -q "$tmp"/*.shell-extension.zip schemas/gschemas.compiled)
 gnome-extensions install --force "$tmp"/*.shell-extension.zip
 echo "    installed $UUID"
 

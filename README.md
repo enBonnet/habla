@@ -86,8 +86,9 @@ install -Dm644 config/config.example ~/.config/voice-dictate/config
 install -Dm644 systemd/ydotoold.service ~/.config/systemd/user/ydotoold.service
 systemctl --user daemon-reload && systemctl --user enable --now ydotoold.service
 glib-compile-schemas schemas
-gnome-extensions pack --force --extra-source=constants.js . && \
-    gnome-extensions install --force habla@enbonnet.github.com.shell-extension.zip
+gnome-extensions pack --force --extra-source=constants.js .
+zip habla@enbonnet.github.com.shell-extension.zip schemas/gschemas.compiled
+gnome-extensions install --force habla@enbonnet.github.com.shell-extension.zip
 ```
 
 Shortcuts then have to be added under Settings → Keyboard → Custom Shortcuts, each
