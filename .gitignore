@@ -1,4 +1,5 @@
 schemas/gschemas.compiled
 pack/
+.build/
 __pycache__/
 *.shell-extension.zip
