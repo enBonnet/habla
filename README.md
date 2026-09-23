@@ -24,6 +24,17 @@ Built for GNOME 50 on Wayland (Fedora 44).
 - **Keeps what you said.** The menu lists your recent transcripts; click one to put it
   back on the clipboard, to paste somewhere else or to edit.
 
+## Screenshots
+
+Recording — live input level, elapsed timer, transcript preview and actions:
+
+![Recording with the menu open](screenshots/menu-recording.png)
+
+The panel states (recording · waiting · transcribing · done · failed):
+
+| ![Recording](screenshots/panel-recording.png) | ![Waiting](screenshots/panel-pausing.png) | ![Transcribing](screenshots/panel-transcribing.png) | ![Done](screenshots/panel-done.png) | ![Failed](screenshots/panel-error.png) |
+|---|---|---|---|---|
+
 ## How it fits together
 
 Two halves that talk through files in `$XDG_RUNTIME_DIR/voice-dictate/`:
