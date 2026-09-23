@@ -1,0 +1,150 @@
+#!/usr/bin/python3
+"""Watch a recording in progress and stop it once you stop talking.
+
+pw-record writes a WAV header up front with zeroed sizes and then appends samples, so
+the clip can be read live from byte 44 while it is still being written.
+
+The threshold is adaptive because a fixed one does not survive contact with reality:
+measured RMS of real speech on this machine (0.003) came in *below* ambient noise on a
+different source (0.15), so "loud enough" only means anything relative to this clip's
+own noise floor.
+"""
+import argparse
+import os
+import subprocess
+import sys
+import time
+
+import numpy as np
+
+HEADER = 44
+RATE = 16000
+FRAME = 480          # 30 ms
+POLL = 0.15
+NOISE_PCTL = 15      # the quiet tail of the distribution is the noise floor
+SPEECH_OVER_NOISE = 2.5  # measured: separates speech (1.0 s detected) from ambient (0.09 s)
+ABS_FLOOR = 2e-4     # below this it is a dead mic, whatever the ratio says
+MIN_SPEECH = 0.3     # cumulative speech before a pause is allowed to end the take
+PAUSE_GRACE = 0.6    # a gap shorter than this is between words, not the end of a take
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("wav")
+    ap.add_argument("--pid", type=int, required=True, help="the recorder to watch")
+    ap.add_argument("--silence", type=float, default=2.0)
+    ap.add_argument("--no-speech-timeout", type=float, default=8.0)
+    ap.add_argument("--stop-command", required=True)
+    ap.add_argument("--level-file", default="", help="publish input level for the UI")
+    args = ap.parse_args()
+
+    offset = HEADER
+    tail = b""
+    floor = None
+    quiet_frames, speech_seconds, started = [], 0.0, time.time()
+    last_speech = None
+    level, threshold = 0.0, None
+
+    while True:
+        time.sleep(POLL)
+        if not _alive(args.pid):
+            _clear(args.level_file)
+            return 0  # stopped by hand; nothing for us to do
+
+        try:
+            size = os.path.getsize(args.wav)
+        except OSError:
+            continue
+        if size > offset:
+            with open(args.wav, "rb") as fh:
+                fh.seek(offset)
+                chunk = tail + fh.read(size - offset)
+            offset = size
+            usable = len(chunk) - (len(chunk) % (FRAME * 2))
+            tail = chunk[usable:]
+            if usable:
+                samples = np.frombuffer(chunk[:usable], dtype=np.int16)
+                samples = samples.astype(np.float32) / 32768.0
+                frames = samples.reshape(-1, FRAME)
+                rms = np.sqrt((frames ** 2).mean(axis=1))
+
+                quiet_frames.extend(rms.tolist())
+                del quiet_frames[:-400]  # keep ~12 s of history
+                # Adapts downward only, so a long stretch of talking cannot drag the
+                # floor up and make the tail of your sentence look like silence.
+                observed = float(np.percentile(quiet_frames, NOISE_PCTL))
+                floor = observed if floor is None else min(floor, observed)
+
+                threshold = max(floor * SPEECH_OVER_NOISE, ABS_FLOOR)
+                loud = rms > threshold
+                level = float(rms[-1])
+                speech_seconds += loud.sum() * FRAME / RATE
+                for i, is_loud in enumerate(loud):
+                    if is_loud:
+                        last_speech = time.time() - (len(loud) - 1 - i) * FRAME / RATE
+
+        now = time.time()
+        armed = speech_seconds >= MIN_SPEECH and last_speech is not None
+        quiet_for = now - last_speech if last_speech is not None else 0.0
+        # Held back until the gap outlasts a pause between words, so the indicator
+        # does not flicker its way through every sentence.
+        countdown = (args.silence - quiet_for
+                     if armed and quiet_for >= PAUSE_GRACE else -1.0)
+        # Published every poll, not only when new audio arrived, so the countdown the
+        # indicator draws keeps moving.
+        if threshold is not None:
+            _publish(args.level_file, level, threshold, countdown)
+
+        if armed and quiet_for >= args.silence:
+            _clear(args.level_file)
+            return _stop(args.stop_command)
+        if not armed and now - started >= args.no_speech_timeout:
+            _clear(args.level_file)
+            return _stop(args.stop_command)  # nothing was ever said; wrap it up
+
+
+def _publish(path, level, threshold, countdown):
+    """Hand the panel indicator something to draw, so you can see it hearing you.
+
+    Three tab-separated fields: the level, scaled so the bar sits a third of the way up
+    exactly at the speech threshold (anything visibly above that line is being counted
+    as speech); whether it currently counts as speech; and the seconds left before this
+    pause ends the take, or -1 while you are still talking. The countdown is what lets
+    the indicator show the wait instead of looking like it is still recording.
+    """
+    if not path:
+        return
+    scaled = min(1.0, level / (threshold * 3.0)) if threshold > 0 else 0.0
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w") as fh:
+            fh.write(f"{scaled:.3f}\t{int(level > threshold)}\t{countdown:.2f}\n")
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _clear(path):
+    if path:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def _stop(command):
+    # The lock fd is not inherited here: this runs detached from voice-dictate.
+    subprocess.Popen([command, "--autostop"], start_new_session=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

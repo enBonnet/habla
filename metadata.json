@@ -1,0 +1,9 @@
+{
+  "uuid": "habla@enbonnet.github.com",
+  "name": "Habla - Voice Dictation",
+  "description": "Panel indicator for local whisper.cpp dictation. Shows a live input level while recording so you can see it hearing you, an elapsed timer, transcription progress and the last transcript. Start, stop, cancel and re-transcribe from the menu or from keyboard shortcuts.",
+  "shell-version": ["50"],
+  "url": "https://github.com/enBonnet/habla",
+  "version": 1,
+  "settings-schema": "org.gnome.shell.extensions.habla"
+}

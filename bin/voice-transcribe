@@ -1,0 +1,95 @@
+#!/usr/bin/python3
+"""Transcribe a 16 kHz mono 16-bit WAV with whisper.cpp. Prints the text on stdout.
+
+Kept separate from voice-dictate so it can be tested, benchmarked, or swapped for a
+cloud backend without touching the record/paste plumbing.
+"""
+import argparse
+import re
+import sys
+import wave
+
+import numpy as np
+
+# Whisper emits these for music, applause, breathing and the like. They are never
+# something you meant to dictate.
+NON_SPEECH = re.compile(r"[\[(\*][^\])\*]{0,40}[\])\*]")
+
+# Whisper's encoder always chews through a padded 30 s window (1500 context tokens)
+# however long you actually spoke, and that encoder is the whole cost. Trimming the
+# context to just cover the clip is the biggest single win: on a 17 s clip it took
+# large-v3-turbo from 9.7 s to 7.6 s. Floored at 768 because below that the model
+# starts repeating and garbling itself.
+MIN_CTX, MAX_CTX = 768, 1500
+
+
+def echoes_prompt(text, prompt):
+    """True when whisper just parroted its own initial prompt back.
+
+    Given near-silence it tends to emit the initial_prompt verbatim, which would
+    otherwise get pasted as if you had said it.
+    """
+    words = re.compile(r"[^\w\s]+")
+    said = words.sub(" ", text.lower()).split()
+    biased = set(words.sub(" ", prompt.lower()).split())
+    if not prompt.strip() or len(said) < 3:
+        return False
+    return sum(w in biased for w in said) / len(said) > 0.8
+
+
+def audio_ctx_for(seconds):
+    """1500 ctx tokens spans 30 s; round up to a multiple of 64 with a little headroom."""
+    want = int((seconds + 1.0) / 30.0 * MAX_CTX)
+    return min(MAX_CTX, max(MIN_CTX, -(-want // 64) * 64))
+
+
+def read_wav(path):
+    with wave.open(path, "rb") as w:
+        if (w.getnchannels(), w.getframerate(), w.getsampwidth()) != (1, 16000, 2):
+            sys.exit(
+                f"expected 16 kHz mono 16-bit wav, got {w.getframerate()} Hz / "
+                f"{w.getnchannels()} ch / {w.getsampwidth() * 8} bit"
+            )
+        raw = w.readframes(w.getnframes())
+    return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("wav")
+    ap.add_argument("--model", default="large-v3-turbo-q5_0")
+    ap.add_argument("--lang", default="auto")
+    ap.add_argument("--threads", type=int, default=16)
+    ap.add_argument("--prompt", default="", help="initial prompt to bias vocabulary")
+    ap.add_argument("--audio-ctx", type=int, default=0, help="0 = pick from clip length")
+    args = ap.parse_args()
+
+    audio = read_wav(args.wav)
+    seconds = len(audio) / 16000
+    if seconds < 0.3:  # a mis-press, not speech
+        return
+
+    from pywhispercpp.model import Model  # imported late; it is slow and noisy
+
+    model = Model(
+        args.model,
+        n_threads=args.threads,
+        language=args.lang,
+        translate=False,
+        no_context=True,
+        print_progress=False,
+        print_realtime=False,
+        print_timestamps=False,
+        suppress_blank=True,
+        initial_prompt=args.prompt,
+        audio_ctx=args.audio_ctx or audio_ctx_for(seconds),
+        redirect_whispercpp_logs_to=None,
+    )
+    text = " ".join(s.text.strip() for s in model.transcribe(audio))
+    text = re.sub(r"\s+", " ", NON_SPEECH.sub("", text)).strip()
+    if text and not echoes_prompt(text, args.prompt):
+        print(text)
+
+
+if __name__ == "__main__":
+    main()

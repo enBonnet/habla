@@ -1,0 +1,62 @@
+# Sourced by voice-dictate. Shell syntax.
+
+# Measured on this machine over the ROCm backend, on a 17 s dictation:
+#   small-q5_1           ~1.5 s   the odd short word or accent slips
+#   large-v3-turbo-q5_0  ~8 s     best quality
+#   medium-q5_0          ~6-11 s  erratic, and no more accurate than small. Skip it.
+# small is the default because an 8 s wait per sentence is worse than an occasional
+# wrong word you can fix with the redo key.
+# Any name from: python3 -c 'import pywhispercpp.constants as c; print(c.AVAILABLE_MODELS)'
+MODEL=small-q5_1
+
+# Used by `voice-dictate --redo` (Super+Alt+G), which re-runs the *same* recording
+# through a better model, so a garbled result never means saying it all again.
+MODEL_ACCURATE=large-v3-turbo-q5_0
+
+# auto | es | en. Auto-detection is reliable on full sentences and shakier on two-word
+# utterances, which is what the per-language hotkeys are for.
+DICTATE_LANG=auto
+
+THREADS=16
+
+# 1 = force the distro whisper build in ahead of pywhispercpp's bundled CPU-only one,
+# which is what enables the ROCm backend on the 860M. Falls back to CPU by itself if
+# that ever stops working. Set to 0 to pin CPU (~5x slower).
+GPU=1
+
+# ydotool 1.0.4 speaks raw keycodes only (see /usr/include/linux/input-event-codes.h).
+#   ctrl+shift+v (terminals, incl. Ptyxis):  29:1 42:1 47:1 47:0 42:0 29:0
+#   ctrl+v       (most GUI apps):            29:1 47:1 47:0 29:0
+PASTE_KEYS="29:1 42:1 47:1 47:0 42:0 29:0"
+
+# Empty = PipeWire default source. Otherwise a name from `pactl list short sources`,
+# e.g. alsa_input.usb-EMEET_EMEET_SmartCam_S600_A241031000700655-02.analog-stereo
+MIC=
+
+# 1 = stop on its own once you pause, so one utterance is one key press. The second
+# press still works as an immediate stop. Set to 0 to always press twice.
+AUTOSTOP=1
+
+# How long a pause means "done". Raise it if it cuts you off while you think.
+SILENCE_SECS=2.0
+
+# Give up and wrap up if nothing was ever said, so a stray press cannot record for
+# the full MAX_SECONDS.
+NO_SPEECH_TIMEOUT=8
+
+# Hard cap so a forgotten recording cannot run forever.
+MAX_SECONDS=120
+
+# 1 = only put the text on the clipboard, never synthesise a paste keystroke.
+COPY_ONLY=0
+
+# Biases spelling of names you say often. Whisper heard "Genome" for GNOME, which is
+# exactly what this fixes; add anything else it keeps getting wrong.
+PROMPT="GNOME, Claude Code, Fedora, PipeWire, Ptyxis, Wayland, zellij, wireplumber, ydotool, whisper."
+
+# auto = stay quiet while the Habla panel indicator is loaded, since it already shows
+#        the same progress far less intrusively. Failures still notify, because those
+#        you would otherwise only find out about by chance.
+# 1    = always notify, indicator or not.
+# 0    = never notify.
+NOTIFY=auto

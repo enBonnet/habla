@@ -1,0 +1,280 @@
+#!/usr/bin/bash
+# Toggle push-to-talk dictation for GNOME on Wayland.
+#
+#   first press  -> start recording
+#   second press -> stop, transcribe, and paste the text wherever the cursor is
+#   --redo       -> re-transcribe the same recording with a slower, better model
+#   --cancel     -> throw the recording away
+#   --clear-history -> forget every transcript
+#
+# It is a toggle rather than hold-to-talk because GNOME delivers only key *press*
+# events to custom keybindings; there is no release event to hang "stop" off.
+#
+# Each press is a fresh process, so the phase it is in is published to a state file for
+# voice-indicator to render in the top bar.
+
+set -uo pipefail
+
+MODEL=small-q5_1
+MODEL_ACCURATE=large-v3-turbo-q5_0
+DICTATE_LANG=auto
+THREADS=16
+GPU=1
+PASTE_KEYS="29:1 42:1 47:1 47:0 42:0 29:0"
+MIC=
+MAX_SECONDS=120
+COPY_ONLY=0
+PROMPT=
+NOTIFY=auto
+AUTOSTOP=1
+SILENCE_SECS=2.0
+NO_SPEECH_TIMEOUT=8
+CANCEL=0
+REDO=0
+AUTOSTOP_CALL=0
+CLEAR_HISTORY=0
+
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/voice-dictate/config"
+[[ -r $CONFIG ]] && . "$CONFIG"
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --lang)      DICTATE_LANG=$2; shift 2 ;;
+        --model)     MODEL=$2;        shift 2 ;;
+        --copy-only) COPY_ONLY=1;     shift ;;
+        --cancel)    CANCEL=1;        shift ;;
+        --redo)      REDO=1;          shift ;;
+        --autostop)  AUTOSTOP_CALL=1; shift ;;   # from voice-autostop: stop, never start
+        --clear-history) CLEAR_HISTORY=1; shift ;;
+        -h|--help)   sed -n '2,15p' "$0"; exit 0 ;;
+        *) echo "voice-dictate: unknown option $1" >&2; exit 2 ;;
+    esac
+done
+
+HERE=$(dirname -- "$(readlink -f -- "$0")")   # GNOME's keybinding PATH is minimal
+RUNDIR="${XDG_RUNTIME_DIR:-/tmp}/voice-dictate"
+PIDFILE="$RUNDIR/recorder.pid"
+STATEFILE="$RUNDIR/state"
+LASTFILE="$RUNDIR/last.txt"
+UIFILE="$RUNDIR/ui"
+# Under audio/ rather than beside the state file: the indicator watches RUNDIR,
+# and this is rewritten several times a second while recording.
+LEVELFILE="$RUNDIR/audio/level"
+# The indicator watches RUNDIR, and pw-record writes continuously, so the audio lives
+# one level down where a non-recursive directory monitor will not see every buffer.
+# It is kept after transcription so --redo has something to work from.
+WAV="$RUNDIR/audio/clip.wav"
+LOGFILE="${XDG_STATE_HOME:-$HOME/.local/state}/voice-dictate/history.tsv"
+mkdir -p "$RUNDIR/audio" "$(dirname "$LOGFILE")"
+export YDOTOOL_SOCKET="${XDG_RUNTIME_DIR:-/tmp}/.ydotool_socket"
+
+now() { date +%s.%N; }
+
+# Published for voice-indicator; written atomically so a half-line is never read.
+set_phase() {
+    printf '%s\t%s\t%s\n' "$1" "$(now)" "${2:-}" >"$STATEFILE.tmp" 2>/dev/null &&
+        mv -f "$STATEFILE.tmp" "$STATEFILE"
+}
+
+# The panel indicator writes this while it is loaded, and removes it on disable, so
+# disabling the extension restores notifications without touching any config.
+ui_present() {
+    local pid
+    [[ -r $UIFILE ]] || return 1
+    pid=$(<"$UIFILE")
+    [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null
+}
+
+# Routine progress chatter. Under NOTIFY=auto this stays quiet whenever the indicator
+# is up, because it already shows the same thing far less intrusively.
+notify() { _notify routine "$@"; }
+
+# Things you would otherwise only find out about by happening to look at the panel.
+notify_fail() { _notify failure "$@"; }
+
+# One replaceable notification rather than a growing stack of them.
+_notify() {
+    local severity=$1 summary=$2 body=${3:-} timeout=${4:-3000}
+    case $NOTIFY in
+        0) return 0 ;;
+        1) ;;
+        *) [[ $severity == failure ]] || ! ui_present || return 0 ;;
+    esac
+    notify-send -a Dictation -h string:x-canonical-private-synchronous:voice-dictate \
+        -t "$timeout" "$summary" "$body"
+}
+
+recording_pid() {
+    local pid
+    [[ -r $PIDFILE ]] || return 1
+    pid=$(<"$PIDFILE")
+    [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null && { echo "$pid"; return 0; }
+    return 1
+}
+
+start_recording() {
+    local target=()
+    rm -f "$WAV"
+    [[ -n $MIC ]] && target=(--target "$MIC")
+    # timeout both caps a forgotten session and relays the SIGINT sent on the next
+    # press; pw-record finalises the WAV header on SIGINT.
+    # 9>&- matters: the recorder outlives this process, and without closing the lock
+    # fd it would inherit and hold the lock for the whole recording, so the press that
+    # is supposed to stop it would block instead.
+    timeout -s INT "$MAX_SECONDS" \
+        pw-record --rate 16000 --channels 1 --format s16 "${target[@]}" "$WAV" \
+        >/dev/null 2>&1 9>&- &
+    echo $! >"$PIDFILE"
+    disown
+    if (( AUTOSTOP )); then
+        # Watches the clip as it is written and stops it once you stop talking, so a
+        # normal utterance costs one key press instead of two. Same 9>&- reason as the
+        # recorder: it outlives us and must not inherit the lock.
+        "$HERE/voice-autostop" "$WAV" --pid "$(<"$PIDFILE")" \
+            --silence "$SILENCE_SECS" --no-speech-timeout "$NO_SPEECH_TIMEOUT" \
+            --stop-command "$HERE/voice-dictate" --level-file "$LEVELFILE" \
+            >/dev/null 2>&1 9>&- &
+        disown
+    fi
+    set_phase recording
+    if (( AUTOSTOP )); then
+        notify "🔴 Recording" "Stops on its own when you pause" 120000
+    else
+        notify "🔴 Recording" "Press again to transcribe" 120000
+    fi
+}
+
+stop_recording() {
+    local pid=$1 _
+    kill -INT "$pid" 2>/dev/null
+    # Started by an earlier invocation, so it is not our child and `wait` cannot see it.
+    for _ in $(seq 1 50); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.1
+    done
+    # Still alive after 5 s: take it down hard, children first, so a wedged
+    # recorder cannot outlive the pidfile and fight the next press.
+    if kill -0 "$pid" 2>/dev/null; then
+        pkill -KILL -P "$pid" 2>/dev/null || true
+        kill -KILL "$pid" 2>/dev/null || true
+    fi
+    rm -f "$PIDFILE" "$LEVELFILE"
+}
+
+run_whisper() {
+    local model=$1 preload=() lib out
+    if [[ $GPU == 1 ]]; then
+        # pywhispercpp bundles a CPU-only whisper; forcing the distro build in ahead of
+        # it is what exposes the ROCm backend on the iGPU (~5x faster).
+        lib=$(ls -1 /usr/lib64/libwhisper.so.1* 2>/dev/null | head -1)
+        [[ -n $lib ]] && preload=(env "LD_PRELOAD=$lib")
+    fi
+    if out=$("${preload[@]}" "$HERE/voice-transcribe" "$WAV" --model "$model" \
+             --lang "$DICTATE_LANG" --threads "$THREADS" --prompt "$PROMPT" 2>/dev/null)
+    then
+        printf '%s' "$out"
+        return 0
+    fi
+    (( ${#preload[@]} )) || return 1   # already on the plain path, nothing left to try
+    out=$("$HERE/voice-transcribe" "$WAV" --model "$model" --lang "$DICTATE_LANG" \
+          --threads "$THREADS" --prompt "$PROMPT" 2>/dev/null) || return 1
+    printf '%s' "$out"
+}
+
+wav_seconds() {
+    python3 -c "
+import sys, wave
+try:
+    with wave.open(sys.argv[1]) as w: print(f'{w.getnframes()/w.getframerate():.1f}')
+except Exception: print('0.0')" "$WAV" 2>/dev/null || echo 0.0
+}
+
+# Delivery goes through the clipboard rather than `ydotool type` on purpose: ydotool
+# types through a US keycode table and mangles every á é í ó ú ñ ¿ ¡. The clipboard is
+# UTF-8 clean, and because terminals honour bracketed paste a multi-line transcript
+# arrives as one editable block instead of being submitted line by line.
+deliver() {
+    local text=$1
+    printf '%s' "$text" >"$LASTFILE"
+    # wl-copy forks a daemon to serve the selection, so it too must not inherit the
+    # lock fd -- otherwise the lock is held until the clipboard is next replaced.
+    printf '%s' "$text" | wl-copy 9>&-
+    if [[ $COPY_ONLY == 1 ]]; then
+        set_phase done copied
+        notify "📋 Copied" "$text" 6000
+        return
+    fi
+    set_phase pasting
+    sleep 0.1   # let wl-copy claim the selection before the paste keystroke lands
+    # shellcheck disable=SC2086 -- PASTE_KEYS is deliberately a list of keycodes
+    ydotool key $PASTE_KEYS
+    notify "✅ Dictated" "$text" 4000
+}
+
+# Shared by the normal second press and by --redo.
+transcribe_and_deliver() {
+    local model=$1 audio started text elapsed
+    audio=$(wav_seconds)
+    set_phase transcribing "${audio}s of audio"
+    notify "⏳ Transcribing…" "${audio}s · $model" 120000
+    started=$(now)
+    if ! text=$(run_whisper "$model"); then
+        set_phase error "transcription failed"
+        notify_fail "⚠ Transcription failed" "run voice-dictate in a terminal to see why" 8000
+        return 1
+    fi
+    elapsed=$(awk -v a="$started" -v b="$(now)" 'BEGIN{printf "%.1f", b-a}')
+    if [[ -z $text ]]; then
+        set_phase done "nothing heard"
+        notify "🔇 Nothing heard"
+        return 0
+    fi
+    # Kept so "how long does this take" and "how often is it right" can be answered
+    # from real use rather than guessed at.
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -Is)" "$audio" "$elapsed" \
+        "$model" "$DICTATE_LANG" "${#text}" "$text" >>"$LOGFILE"
+    deliver "$text"
+    set_phase done "${elapsed}s"
+}
+
+main() {
+    local pid
+    if (( CLEAR_HISTORY )); then
+        : >"$LOGFILE"
+        rm -f "$LASTFILE"
+        return 0
+    fi
+    if (( REDO )); then
+        if [[ ! -s $WAV ]]; then
+            notify_fail "⚠ Nothing to redo" "the last recording is gone"
+            return 1
+        fi
+        transcribe_and_deliver "$MODEL_ACCURATE"
+        return
+    fi
+    if pid=$(recording_pid); then
+        stop_recording "$pid"
+        if (( CANCEL )); then
+            rm -f "$WAV"
+            set_phase idle
+            notify "✖ Cancelled"
+            return 0
+        fi
+        transcribe_and_deliver "$MODEL"
+    else
+        # The watcher and a manual press can race; whichever loses finds no recording
+        # and must not start a new one.
+        (( AUTOSTOP_CALL )) && return 0
+        (( CANCEL )) && return 0
+        start_recording
+    fi
+}
+
+# One press at a time. Without this, a second press landing while transcription is
+# still running fights over the same state and audio files.
+exec 9>"$RUNDIR/lock"
+if ! flock -w 2 9; then
+    notify "⏳ Busy" "still working on the last one"
+    exit 1
+fi
+main

@@ -1,0 +1,13 @@
+[Unit]
+Description=ydotool daemon (user session)
+Documentation=man:ydotoold(8)
+
+[Service]
+Type=simple
+# /dev/uinput carries a logind ACL for the seat owner, so this needs no privileges.
+ExecStart=/usr/bin/ydotoold --socket-path=%t/.ydotool_socket --socket-perm=0600
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

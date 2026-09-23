@@ -1,0 +1,48 @@
+.habla-indicator {
+    spacing: 4px;
+}
+
+.habla-label {
+    font-feature-settings: "tnum";   /* so the timer does not jitter as digits change */
+    font-size: 0.9em;
+    padding-left: 2px;
+}
+
+/* Level meter: five bars that fill as the input gets louder. The third bar sits at
+   the speech threshold, so anything reaching past the middle is being heard as
+   speech rather than room noise. */
+.habla-meter {
+    spacing: 2px;
+    padding: 0 2px;
+}
+
+.habla-meter-bar {
+    width: 3px;
+    border-radius: 1px;
+    background-color: rgba(255, 255, 255, 0.25);
+}
+
+.habla-meter-bar.lit {
+    background-color: #f66151;
+}
+
+.habla-meter-bar.lit-speech {
+    background-color: #57e389;
+}
+
+/* While the take is being ended by a pause the level has nothing left to say, so the
+   same bars drain instead, counting the wait out from the right. */
+.habla-meter-bar.lit-pause {
+    background-color: #ffbe6f;
+}
+
+.habla-recording { color: #f66151; }
+.habla-pausing   { color: #ffbe6f; }
+.habla-working   { color: #99c1f1; }
+.habla-done      { color: #57e389; }
+.habla-error     { color: #f8e45c; }
+
+.habla-transcript {
+    max-width: 380px;
+    font-style: italic;
+}

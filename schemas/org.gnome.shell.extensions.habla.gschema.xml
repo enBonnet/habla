@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.habla"
+          path="/org/gnome/shell/extensions/habla/">
+    <key name="position" type="i">
+      <default>-1</default>
+      <summary>Panel position</summary>
+      <description>Index of the indicator in the top bar, -1 appends at the end</description>
+    </key>
+    <key name="panel-box" type="s">
+      <default>'right'</default>
+      <summary>Panel box</summary>
+      <description>Which side of the top bar holds the indicator: left, center or right</description>
+    </key>
+    <key name="hide-when-idle" type="b">
+      <default>true</default>
+      <summary>Hide when idle</summary>
+      <description>Show the indicator only while dictation is active</description>
+    </key>
+    <key name="show-timer" type="b">
+      <default>true</default>
+      <summary>Show elapsed time</summary>
+      <description>Display a running counter while recording and transcribing</description>
+    </key>
+    <key name="history-size" type="i">
+      <default>10</default>
+      <range min="1" max="30"/>
+      <summary>Transcripts in the menu</summary>
+      <description>How many recent transcripts the Recent transcripts submenu lists</description>
+    </key>
+    <key name="show-level" type="b">
+      <default>true</default>
+      <summary>Show input level</summary>
+      <description>Display a live level meter while recording, so you can see it hearing you</description>
+    </key>
+  </schema>
+</schemalist>
