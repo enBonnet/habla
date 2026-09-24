@@ -161,15 +161,20 @@ PY
 fi
 
 say "GNOME Shell extension"
-command -v zip >/dev/null || { echo "zip(1) is required to bundle the compiled schema" >&2; exit 1; }
-glib-compile-schemas "$HERE/schemas"
+# extensions.gnome.org forbids gschemas.compiled in uploads (the shell compiles
+# schemas itself when installing from the site), so drop any stale local copy and
+# keep the upload zip that lands in pack/ clean of it.
+rm -f "$HERE/schemas/gschemas.compiled"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 gnome-extensions pack --force --out-dir="$tmp" --extra-source=constants.js "$HERE"
-# gnome-extensions pack on GNOME 50 omits schemas/gschemas.compiled; without it
-# getSettings() fails after install, so append the freshly compiled cache.
-(cd "$HERE" && zip -q "$tmp"/*.shell-extension.zip schemas/gschemas.compiled)
+mkdir -p "$HERE/pack"
+cp "$tmp"/*.shell-extension.zip "$HERE/pack/"
 gnome-extensions install --force "$tmp"/*.shell-extension.zip
-echo "    installed $UUID"
+# gnome-extensions on GNOME 50 leaves a locally installed copy without a compiled
+# schema, which breaks getSettings(); compiling one into the installed dir is what
+# keeps local installs working without shipping the cache in the zip.
+glib-compile-schemas "$HOME/.local/share/gnome-shell/extensions/$UUID/schemas"
+echo "    installed $UUID (clean upload zip refreshed in pack/)"
 
 # Superseded by the extension. Left running for this session so you are not left
 # without an indicator; it simply will not come back after you log in again.

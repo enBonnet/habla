@@ -96,11 +96,15 @@ install -Dm755 -t ~/.local/bin bin/voice-*
 install -Dm644 config/config.example ~/.config/voice-dictate/config
 install -Dm644 systemd/ydotoold.service ~/.config/systemd/user/ydotoold.service
 systemctl --user daemon-reload && systemctl --user enable --now ydotoold.service
-glib-compile-schemas schemas
 gnome-extensions pack --force --extra-source=constants.js .
-zip habla@enbonnet.github.com.shell-extension.zip schemas/gschemas.compiled
 gnome-extensions install --force habla@enbonnet.github.com.shell-extension.zip
+glib-compile-schemas ~/.local/share/gnome-shell/extensions/habla@enbonnet.github.com/schemas
 ```
+
+`gnome-extensions pack` leaves `schemas/gschemas.compiled` out of the zip on GNOME 50,
+which is also what extensions.gnome.org requires, since the shell compiles schemas
+itself when installing from the site. The last line compiles one into the installed
+copy, which the local install path otherwise misses.
 
 Shortcuts then have to be added under Settings → Keyboard → Custom Shortcuts, each
 running `~/.local/bin/voice-dictate` with the arguments in the table below.

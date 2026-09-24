@@ -88,6 +88,12 @@ class HablaLevelMeter extends St.BoxLayout {
                 bar.add_style_class_name(styleClass);
         });
     }
+
+    destroy() {
+        this._bars.forEach(bar => bar.destroy());
+        this._bars = null;
+        super.destroy();
+    }
 });
 
 const Indicator = GObject.registerClass(
@@ -149,7 +155,7 @@ class HablaIndicator extends PanelMenu.Button {
         this.menu.addMenuItem(this._historyItem);
         // Rebuilt when the menu opens rather than on every phase change, so the log
         // is read only when someone is actually looking at it.
-        this.menu.connect('open-state-changed', (_menu, isOpen) => {
+        this._menuOpenId = this.menu.connect('open-state-changed', (_menu, isOpen) => {
             if (isOpen)
                 this._rebuildHistory();
         });
@@ -174,6 +180,8 @@ class HablaIndicator extends PanelMenu.Button {
         }
     }
 
+    // Clipboard is write-only here, and only ever from an explicit menu action;
+    // nothing reads it back.
     _copy(text) {
         if (text)
             St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, text);
@@ -373,22 +381,45 @@ class HablaIndicator extends PanelMenu.Button {
     }
 
     _clearTimers() {
-        for (const id of ['_tickId', '_lingerId']) {
-            if (this[id]) {
-                GLib.source_remove(this[id]);
-                this[id] = 0;
-            }
+        if (this._tickId) {
+            GLib.source_remove(this._tickId);
+            this._tickId = 0;
+        }
+        if (this._lingerId) {
+            GLib.source_remove(this._lingerId);
+            this._lingerId = 0;
         }
     }
 
+    // The menu takes its items down with it on cascade, but tearing them down here
+    // keeps ownership explicit and releases every reference this indicator holds.
     destroy() {
         this._clearTimers();
+        if (this._menuOpenId) {
+            this.menu.disconnect(this._menuOpenId);
+            this._menuOpenId = 0;
+        }
         if (this._monitorId) {
             this._monitor.disconnect(this._monitorId);
             this._monitorId = 0;
         }
         this._monitor?.cancel();
         this._monitor = null;
+        this._meter.destroy();
+        this._meter = null;
+        this._statusItem?.destroy();
+        this._statusItem = null;
+        this._transcriptItem?.destroy();
+        this._transcriptItem = null;
+        this._primaryItem?.destroy();
+        this._primaryItem = null;
+        this._cancelItem?.destroy();
+        this._cancelItem = null;
+        this._redoItem?.destroy();
+        this._redoItem = null;
+        this._historyItem?.destroy();
+        this._historyItem = null;
+        this._settings = null;
         super.destroy();
     }
 });
@@ -396,17 +427,18 @@ class HablaIndicator extends PanelMenu.Button {
 export default class HablaExtension extends Extension {
     enable() {
         this._settings = this.getSettings();
-        this._handlerIds = [];
         this._announce(true);
         this._place();
-        for (const key of ['position', 'panel-box']) {
-            this._handlerIds.push(this._settings.connect(
-                `changed::${key}`, () => this._place()));
-        }
-        for (const key of ['hide-when-idle', 'show-timer', 'show-level']) {
-            this._handlerIds.push(this._settings.connect(
-                `changed::${key}`, () => this._indicator?.refresh()));
-        }
+        this._positionId = this._settings.connect('changed::position',
+            () => this._place());
+        this._panelBoxId = this._settings.connect('changed::panel-box',
+            () => this._place());
+        this._hideIdleId = this._settings.connect('changed::hide-when-idle',
+            () => this._indicator?.refresh());
+        this._showTimerId = this._settings.connect('changed::show-timer',
+            () => this._indicator?.refresh());
+        this._showLevelId = this._settings.connect('changed::show-level',
+            () => this._indicator?.refresh());
     }
 
     _place() {
@@ -436,9 +468,13 @@ export default class HablaExtension extends Extension {
 
     disable() {
         this._announce(false);
-        for (const id of this._handlerIds ?? [])
-            this._settings.disconnect(id);
-        this._handlerIds = null;
+        this._settings.disconnect(this._positionId);
+        this._settings.disconnect(this._panelBoxId);
+        this._settings.disconnect(this._hideIdleId);
+        this._settings.disconnect(this._showTimerId);
+        this._settings.disconnect(this._showLevelId);
+        this._positionId = this._panelBoxId = 0;
+        this._hideIdleId = this._showTimerId = this._showLevelId = 0;
         this._indicator?.destroy();
         this._indicator = null;
         this._settings = null;
