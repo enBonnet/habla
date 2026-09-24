@@ -403,21 +403,21 @@ class HablaIndicator extends PanelMenu.Button {
             this._monitor.disconnect(this._monitorId);
             this._monitorId = 0;
         }
-        this._monitor?.cancel();
+        this._monitor.cancel();
         this._monitor = null;
         this._meter.destroy();
         this._meter = null;
-        this._statusItem?.destroy();
+        this._statusItem.destroy();
         this._statusItem = null;
-        this._transcriptItem?.destroy();
+        this._transcriptItem.destroy();
         this._transcriptItem = null;
-        this._primaryItem?.destroy();
+        this._primaryItem.destroy();
         this._primaryItem = null;
-        this._cancelItem?.destroy();
+        this._cancelItem.destroy();
         this._cancelItem = null;
-        this._redoItem?.destroy();
+        this._redoItem.destroy();
         this._redoItem = null;
-        this._historyItem?.destroy();
+        this._historyItem.destroy();
         this._historyItem = null;
         this._settings = null;
         super.destroy();
@@ -428,21 +428,22 @@ export default class HablaExtension extends Extension {
     enable() {
         this._settings = this.getSettings();
         this._announce(true);
+        this._indicator = null;
         this._place();
         this._positionId = this._settings.connect('changed::position',
             () => this._place());
         this._panelBoxId = this._settings.connect('changed::panel-box',
             () => this._place());
         this._hideIdleId = this._settings.connect('changed::hide-when-idle',
-            () => this._indicator?.refresh());
+            () => this._indicator.refresh());
         this._showTimerId = this._settings.connect('changed::show-timer',
-            () => this._indicator?.refresh());
+            () => this._indicator.refresh());
         this._showLevelId = this._settings.connect('changed::show-level',
-            () => this._indicator?.refresh());
+            () => this._indicator.refresh());
     }
 
     _place() {
-        this._indicator?.destroy();
+        this._indicator.destroy();
         this._indicator = new Indicator(this);
         const position = this._settings.get_int('position');
         Main.panel.addToStatusArea(this.uuid, this._indicator,
@@ -475,7 +476,7 @@ export default class HablaExtension extends Extension {
         this._settings.disconnect(this._showLevelId);
         this._positionId = this._panelBoxId = 0;
         this._hideIdleId = this._showTimerId = this._showLevelId = 0;
-        this._indicator?.destroy();
+        this._indicator.destroy();
         this._indicator = null;
         this._settings = null;
     }
